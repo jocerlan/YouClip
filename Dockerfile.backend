@@ -1,0 +1,27 @@
+FROM node:18-alpine
+
+WORKDIR /app
+
+# Instalar dependências do sistema necessárias para yt-dlp
+RUN apk add --no-cache python3 py3-pip curl
+
+# Instalar yt-dlp
+RUN pip install yt-dlp
+
+# Copiar arquivos de configuração
+COPY backend/package.json backend/package-lock.json ./
+
+# Instalar dependências
+RUN npm ci
+
+# Copiar código fonte
+COPY backend/ ./
+
+# Criar diretório de downloads
+RUN mkdir -p downloads && chmod 777 downloads
+
+# Expor porta 5000
+EXPOSE 5000
+
+# Iniciar servidor
+CMD ["node", "server.js"]
