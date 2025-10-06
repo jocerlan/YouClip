@@ -1,109 +1,66 @@
-name: Build and Deploy
+name: Deploy YouClip para EC2 Debian 13
 
 on:
   push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+    branches:
+      - main
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-
-    steps:
-    - uses: actions/checkout@v3
-
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v2
-
-    - name: Build Frontend
-      uses: docker/build-push-action@v4
-      with:
-        context: .
-        file: ./Dockerfile.frontend
-        push: false
-        tags: youclip-frontend:latest
-        outputs: type=docker,dest=/tmp/frontend.tar
-
-    - name: Build Backend
-      uses: docker/build-push-action@v4
-      with:
-        context: .
-        file: ./Dockerfile.backend
-        push: false
-        tags: youclip-backend:latest
-        outputs: type=docker,dest=/tmp/backend.tar
-
-    - name: Upload Frontend image
-      uses: actions/upload-artifact@v3
-      with:
-        name: frontend-image
-        path: /tmp/frontend.tar
-
-    - name: Upload Backend image
-      uses: actions/upload-artifact@v3
-      with:
-        name: backend-image
-        path: /tmp/backend.tar
-
-    - name: Run tests
-      run: |
-        echo "Running tests..."
-        # Adicione comandos de teste aqui quando implementados
-        
   deploy:
-    needs: build
-    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    
+
     steps:
-    - uses: actions/checkout@v3
-    
-    - name: Download Frontend image
-      uses: actions/download-artifact@v3
-      with:
-        name: frontend-image
-        path: /tmp
+      - name: Checkout do código
+        uses: actions/checkout@v3
 
-    - name: Download Backend image
-      uses: actions/download-artifact@v3
-      with:
-        name: backend-image
-        path: /tmp
+      - name: Configurar chave SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
 
-    - name: Install SSH key
-      uses: shimataro/ssh-key-action@v2
-      with:
-        key: ${{ secrets.EC2_SSH_KEY }}
-        known_hosts: 'just-a-placeholder-so-we-dont-get-errors'
-        
-    - name: Adding Known Hosts
-      run: ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
-      
-    - name: Copy images to server
-      run: |
-        scp /tmp/frontend.tar ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:~/youclip/
-        scp /tmp/backend.tar ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:~/youclip/
-        scp docker-compose.yml ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:~/youclip/
-      
-    - name: Deploy to Debian server
-      run: |
-        ssh ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "
-          cd ~/youclip
-          
-          # Parar containers existentes
-          docker-compose down || true
-          
-          # Carregar novas imagens
-          docker load -i frontend.tar
-          docker load -i backend.tar
-          
-          # Remover arquivos tar
-          rm -f frontend.tar backend.tar
-          
-          # Iniciar novos containers
-          docker-compose up -d
-          
-          # Verificar status
-          docker-compose ps
-        "
+      - name: Testar conexão SSH
+        run: ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "echo ✅ Conexão OK!"
+
+      - name: Deploy no servidor Debian 13
+        run: |
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=yes ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "
+            set -e
+            cd /home/${{ secrets.EC2_USER }} || exit
+
+            if [ ! -d youclip ]; then
+              echo '📥 Clonando projeto YouClip pela primeira vez...'
+              git clone ${{ github.server_url }}/${{ github.repository }}.git youclip
+            else
+              if [ ! -d youclip/.git ]; then
+                echo '⚠️ Pasta existe mas não é repositório Git, removendo...'
+                rm -rf youclip
+                git clone ${{ github.server_url }}/${{ github.repository }}.git youclip
+              else
+                echo '🔄 Atualizando repositório existente...'
+                cd youclip
+                git fetch origin main
+                git reset --hard origin/main
+                cd ..
+              fi
+            fi
+
+            cd youclip
+
+            echo '🐳 Parando containers existentes...'
+            sudo docker-compose down || true
+
+            echo '🏗️ Construindo imagens Docker...'
+            sudo docker-compose build --no-cache
+
+            echo '🚀 Iniciando containers...'
+            sudo docker-compose up -d
+
+            echo '📊 Verificando status dos containers...'
+            sudo docker-compose ps
+
+            echo '✅ Deploy do YouClip concluído com sucesso!'
+            echo '🌐 Frontend disponível na porta 3000'
+            echo '⚙️ Backend disponível na porta 5000'
+          "
